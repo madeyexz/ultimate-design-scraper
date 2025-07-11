@@ -15,7 +15,7 @@ from prompt_generator import generate_prompt_from_tokens
 async def process_urls_from_file(
     urls_file: Path, 
     output_dir: Path = None,
-    max_concurrent: int = 3,
+    max_concurrent: int = 1,  # Set to 1 to avoid browser conflicts
     delay_between_requests: float = 2.0
 ):
     """Process multiple URLs from a file"""
@@ -44,34 +44,30 @@ async def process_urls_from_file(
     # Initialize extractor
     extractor = DesignExtractor(output_dir or "extracted_designs")
     
-    # Process URLs in batches
+    # Process URLs sequentially to avoid browser conflicts
     results = []
-    semaphore = asyncio.Semaphore(max_concurrent)
     
-    async def process_single_url(url: str) -> dict:
-        async with semaphore:
-            try:
-                print(f"🔄 Processing: {url}")
-                result = await extractor.extract_design(url)
-                
-                # Generate prompt
-                site_name = result.get('site_name', 'unknown')
-                tokens_file = Path(extractor.output_dir) / site_name / "design_tokens.json"
-                if tokens_file.exists():
-                    prompt_file = tokens_file.parent / "recreation_prompt.md"
-                    generate_prompt_from_tokens(tokens_file, prompt_file)
-                
-                print(f"✅ Completed: {url}")
-                await asyncio.sleep(delay_between_requests)  # Rate limiting
-                return {'url': url, 'status': 'success', 'site_name': site_name}
-                
-            except Exception as e:
-                print(f"❌ Failed: {url} - {str(e)}")
-                return {'url': url, 'status': 'failed', 'error': str(e)}
-    
-    # Process all URLs
-    tasks = [process_single_url(url) for url in processed_urls]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for url in processed_urls:
+        try:
+            print(f"🔄 Processing: {url}")
+            result = await extractor.extract_design(url)
+            
+            # Generate prompt
+            site_name = result.get('site_name', 'unknown')
+            tokens_file = Path(extractor.output_dir) / site_name / "design_tokens.json"
+            if tokens_file.exists():
+                prompt_file = tokens_file.parent / "recreation_prompt.md"
+                generate_prompt_from_tokens(tokens_file, prompt_file)
+            
+            print(f"✅ Completed: {url}")
+            results.append({'url': url, 'status': 'success', 'site_name': site_name})
+            
+            # Rate limiting between requests
+            await asyncio.sleep(delay_between_requests)
+            
+        except Exception as e:
+            print(f"❌ Failed: {url} - {str(e)}")
+            results.append({'url': url, 'status': 'failed', 'error': str(e)})
     
     # Summary
     successful = sum(1 for r in results if isinstance(r, dict) and r.get('status') == 'success')
@@ -98,16 +94,16 @@ async def process_urls_from_file(
 
 async def main():
     """Main execution function"""
-    urls_file = Path("all_links.txt")
+    urls_file = Path("links.txt")
     
     if not urls_file.exists():
-        print("❌ all_links.txt not found. Please create it with URLs to process.")
+        print("❌ links.txt not found. Please create it with URLs to process.")
         return
     
     await process_urls_from_file(
         urls_file=urls_file,
         output_dir=Path("extracted_designs"),
-        max_concurrent=2,  # Lower to be respectful to servers
+        max_concurrent=1,  # Sequential processing to avoid browser conflicts
         delay_between_requests=3.0  # 3 second delay between requests
     )
 
