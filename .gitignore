@@ -10,3 +10,6 @@ wheels/
 .venv
 /extracted_designs
 /links.txt
+
+
+.env
