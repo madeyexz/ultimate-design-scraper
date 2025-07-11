@@ -41,7 +41,7 @@ class DesignExtractor:
             
             try:
                 # Navigate and wait for content
-                await page.goto(url, wait_until='networkidle', timeout=60000)
+                await page.goto(url, wait_until='domcontentloaded', timeout=60000)
                 await page.wait_for_timeout(3000)  # Additional wait for dynamic content
                 
                 # Extract all design tokens
@@ -51,8 +51,8 @@ class DesignExtractor:
                     'screenshot': await self._take_screenshot(page, site_dir),
                     'html': await self._extract_html(page, site_dir),
                     'tokens': await self._extract_tokens(page),
+                    'css_coverage': await self._extract_css_coverage(page, site_dir),  # Before assets to avoid reload interference
                     'assets': await self._extract_assets(page, site_dir),
-                    'css_coverage': await self._extract_css_coverage(page, site_dir),
                     'responsive_breakpoints': await self._extract_breakpoints(page),
                     'animations': await self._extract_animations(page),
                     'interactions': await self._extract_interactions(page, site_dir)
@@ -179,22 +179,82 @@ class DesignExtractor:
         """Extract CSS coverage data"""
         try:
             client = await page.context.new_cdp_session(page)
+            
+            # Enable required domains first
+            await client.send('DOM.enable')
+            await client.send('CSS.enable')
+            await client.send('Runtime.enable')
+            
+            # Start CSS coverage tracking
             await client.send('CSS.startRuleUsageTracking')
             
-            # Trigger some interactions to get better coverage
-            await page.mouse.move(100, 100)
-            await page.mouse.move(500, 500)
+            # Wait for page to fully load and render
+            await page.wait_for_load_state('networkidle')
+            await page.wait_for_timeout(2000)
             
+            # Trigger interactions to capture hover states and dynamic CSS
+            try:
+                # Scroll to trigger any scroll-based styles
+                await page.evaluate('window.scrollTo(0, document.body.scrollHeight / 2)')
+                await page.wait_for_timeout(500)
+                await page.evaluate('window.scrollTo(0, 0)')
+                await page.wait_for_timeout(500)
+                
+                # Hover over interactive elements
+                buttons = await page.query_selector_all('button, a, .btn, [role="button"]')
+                for i, button in enumerate(buttons[:5]):  # Limit to first 5
+                    try:
+                        await button.hover()
+                        await page.wait_for_timeout(100)
+                    except:
+                        continue
+                
+                # Trigger any focus states
+                inputs = await page.query_selector_all('input, textarea, select')
+                for i, input_el in enumerate(inputs[:3]):  # Limit to first 3
+                    try:
+                        await input_el.focus()
+                        await page.wait_for_timeout(100)
+                    except:
+                        continue
+                        
+            except Exception as interaction_error:
+                print(f"Interaction simulation failed: {interaction_error}")
+            
+            # Stop coverage tracking and get results
             coverage = await client.send('CSS.stopRuleUsageTracking')
             
+            # Process the coverage data to make it more useful
+            processed_coverage = {
+                'ruleUsage': coverage.get('ruleUsage', []),
+                'totalRules': len(coverage.get('ruleUsage', [])),
+                'usedRules': len([rule for rule in coverage.get('ruleUsage', []) if rule.get('used', False)]),
+                'coverage_percentage': 0
+            }
+            
+            if processed_coverage['totalRules'] > 0:
+                processed_coverage['coverage_percentage'] = round(
+                    (processed_coverage['usedRules'] / processed_coverage['totalRules']) * 100, 2
+                )
+            
+            # Save the processed coverage
             coverage_path = site_dir / "css_coverage.json"
             with open(coverage_path, 'w') as f:
-                json.dump(coverage, f, indent=2)
+                json.dump(processed_coverage, f, indent=2)
             
-            return coverage
+            print(f"CSS Coverage: {processed_coverage['usedRules']}/{processed_coverage['totalRules']} rules used ({processed_coverage['coverage_percentage']}%)")
+            
+            return processed_coverage
+            
         except Exception as e:
             print(f"CSS coverage extraction failed: {e}")
-            return {}
+            return {
+                'ruleUsage': [],
+                'totalRules': 0,
+                'usedRules': 0,
+                'coverage_percentage': 0,
+                'error': str(e)
+            }
     
     async def _extract_breakpoints(self, page: Page) -> List[Dict[str, Any]]:
         """Extract responsive breakpoints"""
@@ -520,7 +580,11 @@ class DesignExtractor:
         for component_type, patterns in component_patterns.items():
             matching_tokens = []
             for token in tokens:
-                classes = token.get('classes', '').lower()
+                classes = token.get('classes', '')
+                if isinstance(classes, str):
+                    classes = classes.lower()
+                else:
+                    classes = str(classes).lower()
                 if any(pattern in classes for pattern in patterns) or token.get('tag') in patterns:
                     matching_tokens.append(token)
             
@@ -557,7 +621,7 @@ async def main():
     extractor = DesignExtractor()
     
     # Test with a single URL
-    url = "https://example.com"
+    url = "https://brenebrown.com/"
     results = await extractor.extract_design(url)
     
     print(f"Extracted design tokens for: {url}")
