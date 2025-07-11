@@ -13,3 +13,6 @@ wheels/
 
 
 .env
+/consolidated_pages
+/design_prompts
+/gemini_processing.log
