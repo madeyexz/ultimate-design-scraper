@@ -5,6 +5,8 @@ Design Token Extractor - Extract design tokens from websites using Playwright
 import asyncio
 import json
 import os
+import logging
+import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from urllib.parse import urlparse
@@ -16,22 +18,42 @@ from PIL import Image
 import numpy as np
 from sklearn.cluster import KMeans
 import colorsys
+from rich.console import Console
+from rich.logging import RichHandler
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+
+# Setup rich logging
+console = Console()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    datefmt="[%X]",
+    handlers=[RichHandler(console=console, rich_tracebacks=True)]
+)
+logger = logging.getLogger("design_extractor")
 
 
 class DesignExtractor:
     def __init__(self, output_dir: str = "extracted_designs"):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
+        logger.info(f"🚀 Design Extractor initialized with output directory: {self.output_dir}")
         
     async def extract_design(self, url: str, site_name: Optional[str] = None) -> Dict[str, Any]:
         """Main extraction method"""
+        start_time = time.time()
+        
         if not site_name:
             site_name = urlparse(url).netloc.replace("www.", "")
         
         site_dir = self.output_dir / site_name
         site_dir.mkdir(exist_ok=True)
         
+        logger.info(f"🌐 Starting extraction for: {url}")
+        logger.info(f"📁 Output directory: {site_dir}")
+        
         async with async_playwright() as p:
+            logger.info("🎭 Launching Playwright browser...")
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
@@ -41,34 +63,85 @@ class DesignExtractor:
             
             try:
                 # Navigate and wait for content
+                logger.info(f"🚀 Navigating to {url}...")
                 await page.goto(url, wait_until='domcontentloaded', timeout=60000)
                 await page.wait_for_timeout(3000)  # Additional wait for dynamic content
+                logger.info("✅ Page loaded successfully")
                 
                 # Extract all design tokens
-                results = {
-                    'url': url,
-                    'site_name': site_name,
-                    'screenshot': await self._take_screenshot(page, site_dir),
-                    'html': await self._extract_html(page, site_dir),
-                    'tokens': await self._extract_tokens(page),
-                    'css_coverage': await self._extract_css_coverage(page, site_dir),  # Before assets to avoid reload interference
-                    'assets': await self._extract_assets(page, site_dir),
-                    'responsive_breakpoints': await self._extract_breakpoints(page),
-                    'animations': await self._extract_animations(page),
-                    'interactions': await self._extract_interactions(page, site_dir)
-                }
-                
-                # Post-process tokens
-                processed = self._process_tokens(results['tokens'])
-                results.update(processed)
-                
-                # Save results
-                await self._save_results(results, site_dir)
-                
-                return results
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TaskProgressColumn(),
+                    console=console
+                ) as progress:
+                    
+                    extraction_task = progress.add_task("Extracting design tokens...", total=9)
+                    
+                    logger.info("📸 Taking screenshot...")
+                    screenshot = await self._take_screenshot(page, site_dir)
+                    progress.update(extraction_task, advance=1)
+                    
+                    logger.info("📄 Extracting HTML...")
+                    html = await self._extract_html(page, site_dir)
+                    progress.update(extraction_task, advance=1)
+                    
+                    logger.info("🏷️ Extracting design tokens...")
+                    tokens = await self._extract_tokens(page)
+                    progress.update(extraction_task, advance=1)
+                    
+                    logger.info("🎨 Analyzing CSS coverage...")
+                    css_coverage = await self._extract_css_coverage(page, site_dir)
+                    progress.update(extraction_task, advance=1)
+                    
+                    logger.info("🗂️ Extracting assets...")
+                    assets = await self._extract_assets(page, site_dir)
+                    progress.update(extraction_task, advance=1)
+                    
+                    logger.info("📱 Analyzing breakpoints...")
+                    breakpoints = await self._extract_breakpoints(page)
+                    progress.update(extraction_task, advance=1)
+                    
+                    logger.info("✨ Extracting animations...")
+                    animations = await self._extract_animations(page)
+                    progress.update(extraction_task, advance=1)
+                    
+                    logger.info("👆 Analyzing interactions...")
+                    interactions = await self._extract_interactions(page, site_dir)
+                    progress.update(extraction_task, advance=1)
+                    
+                    results = {
+                        'url': url,
+                        'site_name': site_name,
+                        'screenshot': screenshot,
+                        'html': html,
+                        'tokens': tokens,
+                        'css_coverage': css_coverage,
+                        'assets': assets,
+                        'responsive_breakpoints': breakpoints,
+                        'animations': animations,
+                        'interactions': interactions
+                    }
+                    
+                    # Post-process tokens
+                    logger.info("🔄 Processing tokens into design system...")
+                    processed = self._process_tokens(results['tokens'])
+                    results.update(processed)
+                    progress.update(extraction_task, advance=1)
+                    
+                    # Save results
+                    logger.info("💾 Saving results...")
+                    await self._save_results(results, site_dir)
+                    
+                    elapsed_time = time.time() - start_time
+                    logger.info(f"✅ Extraction completed in {elapsed_time:.2f}s")
+                    
+                    return results
                 
             finally:
                 await browser.close()
+                logger.info("🔒 Browser closed")
     
     async def _take_screenshot(self, page: Page, site_dir: Path) -> str:
         """Take full page screenshot"""
@@ -86,6 +159,7 @@ class DesignExtractor:
     
     async def _extract_tokens(self, page: Page) -> List[Dict[str, Any]]:
         """Extract computed style tokens from visible elements"""
+        logger.debug("🔍 Evaluating page JavaScript to extract tokens...")
         tokens = await page.evaluate("""
             () => {
                 const elements = Array.from(document.querySelectorAll('*'))
@@ -156,6 +230,7 @@ class DesignExtractor:
                 });
             }
         """)
+        logger.debug(f"📊 Extracted {len(tokens)} design tokens from visible elements")
         return tokens
     
     async def _extract_assets(self, page: Page, site_dir: Path) -> List[Dict[str, str]]:
@@ -171,8 +246,10 @@ class DesignExtractor:
                 })
         
         page.on('request', handle_request)
+        logger.debug("🔄 Reloading page to capture asset requests...")
         await page.reload(wait_until='networkidle')
         
+        logger.debug(f"🗂️ Captured {len(assets)} asset requests")
         return assets
     
     async def _extract_css_coverage(self, page: Page, site_dir: Path) -> Dict[str, Any]:
@@ -242,12 +319,12 @@ class DesignExtractor:
             with open(coverage_path, 'w') as f:
                 json.dump(processed_coverage, f, indent=2)
             
-            print(f"CSS Coverage: {processed_coverage['usedRules']}/{processed_coverage['totalRules']} rules used ({processed_coverage['coverage_percentage']}%)")
+            logger.info(f"📊 CSS Coverage: {processed_coverage['usedRules']}/{processed_coverage['totalRules']} rules used ({processed_coverage['coverage_percentage']}%)")
             
             return processed_coverage
             
         except Exception as e:
-            print(f"CSS coverage extraction failed: {e}")
+            logger.error(f"❌ CSS coverage extraction failed: {e}")
             return {
                 'ruleUsage': [],
                 'totalRules': 0,
@@ -282,6 +359,7 @@ class DesignExtractor:
                 return breakpoints;
             }
         """)
+        logger.debug(f"📱 Found {len(breakpoints)} responsive breakpoints")
         return breakpoints
     
     async def _extract_animations(self, page: Page) -> List[Dict[str, Any]]:
@@ -323,6 +401,7 @@ class DesignExtractor:
                 return { animations, keyframes };
             }
         """)
+        logger.debug(f"✨ Found {len(animations.get('animations', []))} animations and {len(animations.get('keyframes', []))} keyframes")
         return animations
     
     async def _extract_interactions(self, page: Page, site_dir: Path) -> Dict[str, Any]:
@@ -355,6 +434,8 @@ class DesignExtractor:
             }
         """)
         
+        logger.debug(f"🎯 Found {len(interactive_elements)} interactive elements")
+        
         # Capture hover states
         hover_states = []
         for element in interactive_elements[:5]:  # Limit to first 5
@@ -384,29 +465,38 @@ class DesignExtractor:
                         'hover_style': hover_style
                     })
             except Exception as e:
-                print(f"Failed to capture hover state: {e}")
+                logger.debug(f"Failed to capture hover state: {e}")
         
         interactions['hover_states'] = hover_states
+        logger.debug(f"👆 Captured {len(hover_states)} hover states")
         return interactions
     
     def _process_tokens(self, tokens: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Process and cluster tokens into design system"""
         if not tokens:
+            logger.warning("⚠️ No tokens to process")
             return {}
+        
+        logger.debug(f"🔄 Processing {len(tokens)} tokens into design system...")
         
         # Extract and cluster colors
         colors = self._extract_colors(tokens)
         color_palette = self._cluster_colors(colors)
+        logger.debug(f"🎨 Found {len(colors)} unique colors, clustered into {len(color_palette.get('primary_colors', []))} primary colors")
         
         # Extract and cluster fonts
         fonts = self._extract_fonts(tokens)
         font_system = self._cluster_fonts(fonts)
+        logger.debug(f"📝 Found {len(fonts)} font instances, {len(font_system.get('primary_fonts', []))} primary fonts")
         
         # Extract spacing scale
         spacing_scale = self._extract_spacing_scale(tokens)
+        logger.debug(f"📏 Generated spacing scale with {len(spacing_scale)} values")
         
         # Extract component patterns
         components = self._extract_components(tokens)
+        component_count = sum(len(comp_list) for comp_list in components.values())
+        logger.debug(f"🧩 Identified {component_count} components across {len(components)} categories")
         
         return {
             'color_palette': color_palette,
@@ -613,7 +703,7 @@ class DesignExtractor:
         with open(results_path, 'w') as f:
             json.dump(simplified_results, f, indent=2)
         
-        print(f"✅ Design tokens saved to: {results_path}")
+        logger.info(f"✅ Design tokens saved to: {results_path}")
 
 
 async def main():
@@ -621,13 +711,14 @@ async def main():
     extractor = DesignExtractor()
     
     # Test with a single URL
-    url = "https://brenebrown.com/"
+    url = "https://bryce-hall.com/"
     results = await extractor.extract_design(url)
     
-    print(f"Extracted design tokens for: {url}")
-    print(f"Found {len(results.get('color_palette', {}).get('primary_colors', []))} primary colors")
-    print(f"Found {len(results.get('typography_system', {}).get('primary_fonts', []))} primary fonts")
-    print(f"Found {len(results.get('spacing_scale', []))} spacing values")
+    logger.info(f"🎯 Extraction Summary for: {url}")
+    logger.info(f"   🎨 {len(results.get('color_palette', {}).get('primary_colors', []))} primary colors")
+    logger.info(f"   📝 {len(results.get('typography_system', {}).get('primary_fonts', []))} primary fonts")
+    logger.info(f"   📏 {len(results.get('spacing_scale', []))} spacing values")
+    logger.info(f"   🧩 {len(results.get('components', {}))} component categories")
 
 
 if __name__ == "__main__":
