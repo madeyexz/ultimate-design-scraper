@@ -12,15 +12,44 @@ A Python-based tool for extracting design tokens and generating AI-friendly prom
 - 📱 **Responsive Analysis**: Breakpoint detection and responsive patterns
 - ✨ **Animation Detection**: CSS animations and transitions
 - 🤖 **AI Prompt Generation**: Converts tokens into detailed recreation prompts
+- 📊 **Rich Terminal UI**: Progress bars and colored logging output
+- 🔄 **Batch Processing**: Sequential processing to avoid browser conflicts
 
 ## Installation
 
-1. **Install Python dependencies:**
+### Recommended: Using uv (Fast)
+
+[uv](https://docs.astral.sh/uv/) is a fast Python package manager that handles dependencies and virtual environments automatically.
+
+1. **Install uv** (if not already installed):
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+2. **Install dependencies:**
+```bash
+uv sync
+```
+
+3. **Install Playwright browsers:**
+```bash
+uv run playwright install chromium
+```
+
+### Alternative: Using pip
+
+1. **Create virtual environment:**
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+2. **Install Python dependencies:**
 ```bash
 pip install -r requirements.txt
 ```
 
-2. **Install Playwright browsers:**
+3. **Install Playwright browsers:**
 ```bash
 playwright install chromium
 ```
@@ -29,6 +58,22 @@ playwright install chromium
 
 ### Single URL Extraction
 
+**Using uv:**
+```bash
+uv run python -c "
+from design_extractor import DesignExtractor
+import asyncio
+
+async def extract_single_site():
+    extractor = DesignExtractor()
+    results = await extractor.extract_design('https://example.com')
+    print(f'Extracted tokens for: {results[\"site_name\"]}')
+
+asyncio.run(extract_single_site())
+"
+```
+
+**Using regular Python:**
 ```python
 from design_extractor import DesignExtractor
 import asyncio
@@ -43,23 +88,57 @@ asyncio.run(extract_single_site())
 
 ### Batch Processing
 
-Process multiple URLs from your `all_links.txt` file:
+Process multiple URLs from your `links.txt` file:
 
+**Using uv:**
+```bash
+uv run python batch_extractor.py
+```
+
+**Using regular Python:**
 ```bash
 python batch_extractor.py
 ```
 
 This will:
-- Read URLs from `all_links.txt`
-- Extract design tokens for each site
-- Generate AI-friendly prompts
+- Read URLs from `links.txt` (one URL per line)
+- Extract design tokens for each site sequentially (to avoid browser conflicts)
+- Generate AI-friendly prompts automatically
 - Save results to `extracted_designs/` directory
+- Show progress bars and colored output for better visibility
 
 ### Manual Processing
 
+**Using uv:**
+```bash
+uv run python -c "
+from design_extractor import DesignExtractor
+from prompt_generator import generate_prompt_from_tokens
+from pathlib import Path
+import asyncio
+
+async def process_site(url):
+    # Extract design tokens
+    extractor = DesignExtractor()
+    results = await extractor.extract_design(url)
+    
+    # Generate prompt
+    site_name = results['site_name']
+    tokens_file = Path(f'extracted_designs/{site_name}/design_tokens.json')
+    prompt_file = Path(f'extracted_designs/{site_name}/recreation_prompt.md')
+    
+    generate_prompt_from_tokens(tokens_file, prompt_file)
+
+# Process your links
+asyncio.run(process_site('https://example.com'))
+"
+```
+
+**Using regular Python:**
 ```python
 from design_extractor import DesignExtractor
 from prompt_generator import generate_prompt_from_tokens
+from pathlib import Path
 import asyncio
 
 async def process_site(url):
@@ -165,7 +244,7 @@ Modify `design_extractor.py` to adjust:
 ### Batch Processing
 
 Configure `batch_extractor.py`:
-- `max_concurrent`: Number of simultaneous extractions (default: 2)
+- `max_concurrent`: Processing mode (default: 1 for sequential processing to avoid browser conflicts)
 - `delay_between_requests`: Delay between requests in seconds (default: 3.0)
 
 ## Advanced Usage
@@ -217,18 +296,23 @@ class CustomPromptGenerator(PromptGenerator):
 
 3. **Rate Limiting**
    - Increase `delay_between_requests`
-   - Reduce `max_concurrent` workers
+   - Processing is sequential by default to avoid browser conflicts
 
 4. **CORS Issues**
    - Some CSS coverage may be limited due to CORS
    - Screenshots and HTML extraction work regardless
 
+5. **Browser Conflicts**
+   - The tool processes URLs sequentially to avoid "Only one live display may be active at once" errors
+   - Each URL uses a fresh browser instance
+
 ### Performance Tips
 
-- Use `headless=True` for faster extraction
+- Use `headless=True` for faster extraction (default)
 - Limit element analysis to visible elements only
 - Process in smaller batches for large URL lists
 - Use SSD storage for better I/O performance
+- Consider using `uv` for faster dependency management
 
 ## License
 
